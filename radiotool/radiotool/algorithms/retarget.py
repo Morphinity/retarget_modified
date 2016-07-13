@@ -92,6 +92,56 @@ def retarget_to_length(song, duration, start=True, end=True, slack=5,
     return comp
 
 
+def retarget_multi_songs_to_length(songs, duration, start=True, end=True, slack=5,
+                       beats_per_measure=None):
+    duration = float(duration)
+    constraints = [
+        rt_constraints.TimbrePitchConstraint(
+            context=0, timbre_weight=1.0, chroma_weight=1.0),
+        rt_constraints.EnergyConstraint(penalty=.5),
+        rt_constraints.MinimumLoopConstraint(8),
+    ]
+    if beats_per_measure is not None:
+        constraints.append(
+            rt_constraints.RhythmConstraint(beats_per_measure, .125))
+
+    if start:
+        constraints.append(
+            rt_constraints.StartAtStartConstraint(padding=0))
+
+    if end:
+        constraints.append(
+            rt_constraints.EndAtEndConstraint(padding=slack))
+
+    comp, info = retarget(
+        songs, duration, constraints=constraints,
+        fade_in_len=None, fade_out_len=None)
+
+    # force the new track to extend to the end of the song
+    if end:
+        last_seg = sorted(
+            comp.segments,
+            key=lambda seg:
+            seg.comp_location_in_seconds + seg.duration_in_seconds
+        )[-1]
+
+        last_seg.duration_in_seconds = (
+            songs[1].duration_in_seconds - last_seg.start_in_seconds)
+
+    path_cost = info["path_cost"]
+    total_nonzero_cost = []
+    total_nonzero_points = []
+    for node in path_cost:
+        if float(node.name) > 0.0:
+            total_nonzero_cost.append(float(node.name))
+            total_nonzero_points.append(float(node.time))
+
+    transitions = zip(total_nonzero_points, total_nonzero_cost)
+
+    for transition in transitions:
+        comp.add_label(Label("crossfade", transition[0]))
+    return comp
+
 def retarget_with_change_points(song, cp_times, duration):
     """Create a composition of a song of a given duration that reaches
     music change points at specified times. This is still under
@@ -305,23 +355,28 @@ def retarget(songs, duration, music_labels=None, out_labels=None,
         ) for in_va in in_vas]
     else:
         max_pause_beats = 0
-        if len(constraints) > 0:
-            if isinstance(constraints[0], rt_constraints.Constraint):
-                constraints = [constraints]
+        #if len(constraints) > 0:
+        #    if isinstance(constraints[0], rt_constraints.Constraint):
+        #        constraints = [constraints]
 
-    pipelines = [rt_constraints.ConstraintPipeline(constraints=c_set)
-                 for c_set in constraints]
+    #pipelines = [rt_constraints.ConstraintPipeline(constraints=c_set)
+    #             for c_set in constraints
+
+    pipeline = rt_constraints.ConstraintPipeline(constraints=constraints)
 
     trans_costs = []
     penalties = []
     all_beat_names = []
 
-    for i, song in enumerate(songs):
-        (trans_cost, penalty, bn) = pipelines[i].apply(song, len(target))
-        trans_costs.append(trans_cost)
-        penalties.append(penalty)
-        all_beat_names.append(bn)
+    #for i, song in enumerate(songs):
+    #    (trans_cost, penalty, bn) = pipeline.apply(song, len(target))
+    #    trans_costs.append(trans_cost)
+    #    penalties.append(penalty)
+    #   all_beat_names.append(bn)
 
+    (trans_costs, penalties, all_beat_names) = pipeline.apply(songs, len(target))
+
+    # remove combinging tables
     logging.info("Combining tables")
     total_music_beats = int(np.sum([len(b) for b in beats]))
     total_beats = total_music_beats + max_pause_beats

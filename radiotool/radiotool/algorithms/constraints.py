@@ -37,11 +37,23 @@ class ConstraintPipeline(object):
         return transition_cost, penalty, beat_names
 
 
+    def applyModified(self, songs, target_n_length):
+        for constraint in self.constraints:
+            transition_cost, penalty, beat_names = constraint.applyModified(songs)
+        return transition_cost, penalty, beat_names
+
+
 class Constraint(object):
     def __init__(self):
         pass
 
     def apply(self, transition_cost, penalty, song, beat_names):
+        return transition_cost, penalty, beat_names
+
+    def applyModified(self, songs):
+        transition_cost = []
+        penalty = []
+        beat_names = []
         return transition_cost, penalty, beat_names
 
 
