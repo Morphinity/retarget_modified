@@ -35,7 +35,8 @@ parser.add_argument('-q', '--quiet', action='store_true', help="Quiet; do not pr
 parser.add_argument('input1', metavar='INFILE', type=str, help='Audio file to retarget (WAV format)')
 parser.add_argument('input2', metavar='INFILE', type=str, help='Audio file to retarget (WAV format)')
 parser.add_argument('--s', '--single', dest='singlesong', action='store_true')
-parser.set_defaults(start=True, end=True, singlesong=False)
+parser.add_argument('--old', dest='old', action='store_true')
+parser.set_defaults(start=True, end=True, singlesong=False, old=False)
 args = parser.parse_args()
 
 inpath1 = Path(args.input1)
@@ -79,7 +80,7 @@ if not args.singlesong:
 if change_points:
     composition, change_points = retarget.retarget_with_change_points(song1, change_points, length)
 elif not args.singlesong:
-    composition = retarget.retarget_multi_songs_to_length([song1, song2], length, start=args.start, end=args.end)
+    composition = retarget.retarget_multi_songs_to_length([song1, song2], length, start=args.start, end=args.end, old=args.old)
 else :
     composition = retarget.retarget_to_length(song1, length, start=args.start, end=args.end)
 

@@ -7,6 +7,7 @@ import copy
 
 import numpy as np
 from scipy.special import binom
+import scipy.spatial
 import scipy
 
 import librosa_analysis
@@ -36,11 +37,19 @@ class ConstraintPipeline(object):
                 transition_cost, penalty, song, beat_names)
         return transition_cost, penalty, beat_names
 
-
     def applyModified(self, songs, target_n_length):
+        total_n_beats = 0
+        all_beat_names = []
+        for song in songs:
+            total_n_beats += len(song.analysis["beats"])
+            all_beat_names.append(copy.copy(song.analysis["beats"]))
+
+        transition_cost = np.zeros((total_n_beats, total_n_beats))
+        penalty = np.zeros((total_n_beats, target_n_length))
+
         for constraint in self.constraints:
-            transition_cost, penalty, beat_names = constraint.applyModified(songs)
-        return transition_cost, penalty, beat_names
+            transition_cost, penalty = constraint.applyModified(songs, transition_cost, penalty)
+        return transition_cost, penalty, all_beat_names
 
 
 class Constraint(object):
@@ -50,11 +59,10 @@ class Constraint(object):
     def apply(self, transition_cost, penalty, song, beat_names):
         return transition_cost, penalty, beat_names
 
-    def applyModified(self, songs):
+    def applyModified(self, songs, transition_cost, penalty):
         transition_cost = []
         penalty = []
-        beat_names = []
-        return transition_cost, penalty, beat_names
+        return transition_cost, penalty
 
 
 class RandomJitterConstraint(Constraint):
@@ -283,6 +291,49 @@ class EnergyConstraint(Constraint):
 
         return transition_cost, penalty, beat_names
 
+    def applyModified(self, songs, transition_cost, penalty):  #(self, transition_cost, penalty, song, beat_names):
+        total_n_beats = 0
+        for song in songs:
+            total_n_beats += len(song.analysis["beats"])
+        energies = np.zeros(total_n_beats)
+        counter = 0
+        for k, song in enumerate(songs):
+            sr = song.samplerate
+            frames = song.all_as_mono()
+            n_beats = len(song.analysis["beats"])
+            beat_names = copy.copy(song.analysis["beats"])
+
+            for i, beat in enumerate(beat_names[:n_beats - 1]):
+                start_frame = int(sr * beat)
+                end_frame = int(sr * beat_names[:n_beats][i + 1])
+                beat_frames = frames[start_frame:end_frame]
+                beat_frames *= np.hamming(len(beat_frames))
+                energies[counter] = np.sqrt(np.mean(beat_frames * beat_frames))
+                counter += 1
+
+            if k == len(songs) - 1:
+                energies[counter] = energies[-2]
+            else:
+                beat = beat_names[n_beats - 1]
+                start_frame = int(sr * beat)
+                beat_frames = frames[start_frame:]
+                beat_frames *= np.hamming(len(beat_frames))
+                energies[counter] = np.sqrt(np.mean(beat_frames * beat_frames))
+                counter += 1
+
+        energies = [[x] for x in energies]
+
+        dist_matrix = 10 * scipy.spatial.distance.squareform(
+            scipy.spatial.distance.pdist(energies, 'euclidean'))
+
+        # shift it
+        dist_matrix[:-1, :] = dist_matrix[1:, :]
+        dist_matrix[-1, :] = np.inf
+
+        transition_cost[:total_n_beats, :total_n_beats] += (dist_matrix * self.penalty)
+
+        return transition_cost, penalty
+
     def __repr__(self):
         return "EnergyConstraint: penalty=%f" % self.penalty
 
@@ -404,6 +455,10 @@ class StartAtStartConstraint(Constraint):
         penalty[self.padding + 1:, 0] += np.inf
         return transition_cost, penalty, beat_names
 
+    def applyModified(self, songs, transition_cost, penalty):
+        penalty[self.padding + 1:, 0] += np.inf
+        return transition_cost, penalty
+
     def __str__(self):
         return "StartAtStartConstraint"
 
@@ -480,6 +535,15 @@ class EndAtEndConstraint(Constraint):
         penalty[last_beat:, -1] += np.inf
         penalty[:last_beat - self.padding, -1] += np.inf
         return transition_cost, penalty, beat_names
+
+    def applyModified(self, songs, transition_cost, penalty):
+        total_n_beats = 0
+        for song in songs:
+            total_n_beats += len(song.analysis["beats"])
+        last_beat = total_n_beats
+        penalty[last_beat:, -1] += np.inf
+        penalty[:last_beat - self.padding, -1] += np.inf
+        return transition_cost, penalty
 
     def __str__(self):
         return "EndAtEndConstraint"

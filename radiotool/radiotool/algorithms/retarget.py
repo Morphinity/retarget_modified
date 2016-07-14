@@ -47,8 +47,9 @@ def retarget_to_length(song, duration, start=True, end=True, slack=5,
         rt_constraints.TimbrePitchConstraint(
             context=0, timbre_weight=1.0, chroma_weight=1.0),
         rt_constraints.EnergyConstraint(penalty=.5),
-        rt_constraints.MinimumLoopConstraint(8),
+        rt_constraints.MinimumLoopConstraint(8)
     ]
+
 
     if beats_per_measure is not None:
         constraints.append(
@@ -92,7 +93,7 @@ def retarget_to_length(song, duration, start=True, end=True, slack=5,
     return comp
 
 
-def retarget_multi_songs_to_length(songs, duration, start=True, end=True, slack=5,
+def retarget_multi_songs_to_length(songs, duration, start=True, end=True, old=False, slack=5,
                        beats_per_measure=None):
     duration = float(duration)
     constraints = [
@@ -112,11 +113,13 @@ def retarget_multi_songs_to_length(songs, duration, start=True, end=True, slack=
     if end:
         constraints.append(
             rt_constraints.EndAtEndConstraint(padding=slack))
-
-    comp, info = retarget(
-        songs, duration, constraints=constraints,
-        fade_in_len=None, fade_out_len=None)
-
+    if old:
+        comp, info = retarget(
+            songs, duration, constraints=[constraints, constraints],
+            fade_in_len=None, fade_out_len=None)
+    else :
+        comp, info = retargetMod(songs, duration, constraints=constraints,
+                                 fade_in_len=None, fade_out_len=None)
     # force the new track to extend to the end of the song
     if end:
         last_seg = sorted(
@@ -216,6 +219,336 @@ def retarget_with_change_points(song, cp_times, duration):
 
     return comp, final_cp_locations
 
+def retargetMod(songs, duration, music_labels=None, out_labels=None,
+                     out_penalty=None, volume=None, volume_breakpoints=None,
+                     springs=None, constraints=None,
+                     min_beats=None, max_beats=None,
+                     fade_in_len=3.0, fade_out_len=5.0,
+                     **kwargs):
+
+
+    """Retarget a song to a duration given input and output labels on
+    the music.
+
+    Suppose you like one section of a song, say, the guitar solo, and
+    you want to create a three minute long version of the solo.
+    Suppose the guitar solo occurs from the 150 second mark to the 200
+    second mark in the original song.
+
+    You can set the label the guitar solo with 'solo' and the rest of
+    the song with 'other' by crafting the ``music_labels`` input
+    function. And you can set the ``out_labels`` function to give you
+    nothing but solo::
+
+        def labels(t):
+            if 150 < t < 200:
+                return 'solo'
+            return 'other'
+
+        def target(t): return 'solo'
+
+        song = Song("sweet-rock-song.wav")
+
+        composition, info = retarget(song, 180,
+            music_labels=labels, out_labels=target)
+
+        composition.export(filename="super-long-solo")
+
+    You can achieve much more complicated retargetings by adjusting
+    the ``music_labels``, `out_labels` and ``out_penalty`` functions,
+    but this should give you a basic sense of how to use the
+    ``retarget`` function.
+
+    :param song: Song to retarget
+    :type song: :py:class:`radiotool.composer.Song`
+    :param duration: Duration of retargeted song (in seconds)
+    :type duration: float
+    :param music_labels: A function that takes a time (in seconds) and
+        returns the label (str) of the input music at that time
+    :type music_labels: function
+    :param out_labels: A function that takes a time (in seconds) and
+        returns the desired label (str) of the output music at that
+        time
+    :type out_labels: function
+    :param out_penalty: A function that takes a time (in seconds) and
+        returns the penalty for not matching the correct output label
+        at that time (default is 1.0)
+    :type out_penalty: function
+    :returns: Composition of retargeted song, and dictionary of
+        information about the retargeting
+    :rtype: (:py:class:`radiotool.composer.Composition`, dict)
+    """
+
+    # get song analysis
+    if isinstance(songs, Track):
+        songs = [songs]
+    multi_songs = len(songs) > 1
+
+    analyses = [s.analysis for s in songs]
+
+    # generate labels for every beat in the input and output
+    beat_lengths = [a[BEAT_DUR_KEY] for a in analyses]
+    beats = [a["beats"] for a in analyses]
+
+    beat_length = np.mean(beat_lengths)
+    logging.info("Beat lengths of songs: {} (mean: {})".
+                 format(beat_lengths, beat_length))
+
+    if out_labels is not None:
+        target = [out_labels(i) for i in np.arange(0, duration, beat_length)]
+    else:
+        target = ["" for i in np.arange(0, duration, beat_length)]
+
+    if music_labels is not None:
+        if not multi_songs:
+            music_labels = [music_labels]
+            music_labels = [item for sublist in music_labels
+                            for item in sublist]
+        if len(music_labels) != len(songs):
+            raise ArgumentException("Did not specify {} sets of music labels".
+                                    format(len(songs)))
+        start = [[music_labels[i](j) for j in b] for i, b in enumerate(beats)]
+    else:
+        start = [["" for i in b] for b in beats]
+
+    if out_penalty is not None:
+        pen = np.array([out_penalty(i) for i in np.arange(
+            0, duration, beat_length)])
+    else:
+        pen = np.array([1 for i in np.arange(0, duration, beat_length)])
+
+    # we're using a valence/arousal constraint, so we need these
+    in_vas = kwargs.pop('music_va', None)
+    if in_vas is not None:
+        if not multi_songs:
+            in_vas = [in_vas]
+            in_vas = [item for sublist in in_vas for item in sublist]
+        if len(in_vas) != len(songs):
+            raise ArgumentException("Did not specify {} sets of v/a labels".
+                                    format(len(songs)))
+        for i, in_va in enumerate(in_vas):
+            if callable(in_va):
+                in_va = np.array([in_va(j) for j in beats[i]])
+            in_vas[i] = in_va
+
+    target_va = kwargs.pop('out_va', None)
+    if callable(target_va):
+        target_va = np.array(
+            [target_va(i) for i in np.arange(0, duration, beat_length)])
+
+    # set constraints
+    if constraints is None:
+        min_pause_len = 20.
+        max_pause_len = 35.
+        min_pause_beats = int(np.ceil(min_pause_len / beat_length))
+        max_pause_beats = int(np.floor(max_pause_len / beat_length))
+
+        constraints = [(
+                           rt_constraints.PauseConstraint(
+                               min_pause_beats, max_pause_beats,
+                               to_penalty=1.4, between_penalty=.05, unit="beats"),
+                           rt_constraints.PauseEntryVAChangeConstraint(target_va, .005),
+                           rt_constraints.PauseExitVAChangeConstraint(target_va, .005),
+                           rt_constraints.TimbrePitchConstraint(
+                               context=0, timbre_weight=1.5, chroma_weight=1.5),
+                           rt_constraints.EnergyConstraint(penalty=0.5),
+                           rt_constraints.MinimumLoopConstraint(8),
+                           rt_constraints.ValenceArousalConstraint(
+                               in_va, target_va, pen * .125),
+                           rt_constraints.NoveltyVAConstraint(in_va, target_va, pen),
+                       ) for in_va in in_vas]
+    else:
+        max_pause_beats = 0
+        # if len(constraints) > 0:
+        #    if isinstance(constraints[0], rt_constraints.Constraint):
+        #        constraints = [constraints]
+
+    # pipelines = [rt_constraints.ConstraintPipeline(constraints=c_set)
+    #             for c_set in constraints
+
+    pipeline = rt_constraints.ConstraintPipeline(constraints=constraints)
+
+    trans_costs = []
+    penalties = []
+    all_beat_names = []
+
+    # for i, song in enumerate(songs):
+    #    (trans_cost, penalty, bn) = pipeline.apply(song, len(target))
+    #    trans_costs.append(trans_cost)
+    #    penalties.append(penalty)
+    #   all_beat_names.append(bn)
+
+    (trans_costs, penalties, all_beat_names) = pipeline.applyModified(songs, len(target))
+
+    # remove combinging tables
+    logging.info("Combining tables")
+    total_music_beats = int(np.sum([len(b) for b in beats]))
+    total_beats = total_music_beats + max_pause_beats
+
+    # combine transition cost tables
+
+    trans_cost = np.ones((total_beats, total_beats)) * np.inf
+    sizes = [len(b) for b in beats]
+    idx = 0
+    for i, size in enumerate(sizes):
+        trans_cost[idx:idx + size, idx:idx + size] = \
+            trans_costs[i][:size, :size]
+        idx += size
+
+    trans_cost[:total_music_beats, total_music_beats:] = \
+        np.vstack([tc[:len(beats[i]), len(beats[i]):]
+                   for i, tc in enumerate(trans_costs)])
+
+    trans_cost[total_music_beats:, :total_music_beats] = \
+        np.hstack([tc[len(beats[i]):, :len(beats[i])]
+                   for i, tc in enumerate(trans_costs)])
+
+    trans_cost[total_music_beats:, total_music_beats:] = \
+        trans_costs[0][len(beats[0]):, len(beats[0]):]
+
+    # combine penalty tables
+    penalty = np.empty((total_beats, penalties[0].shape[1]))
+
+    penalty[:total_music_beats, :] = \
+        np.vstack([p[:len(beats[i]), :] for i, p in enumerate(penalties)])
+
+    penalty[total_music_beats:, :] = penalties[0][len(beats[0]):, :]
+
+    logging.info("Building cost table")
+
+    # compute the dynamic programming table (prev python method)
+    # cost, prev_node = _build_table(analysis, duration, start, target, pen)
+
+    # first_pause = 0
+    # if max_pause_beats > 0:
+    first_pause = total_music_beats
+
+    if min_beats is None:
+        min_beats = 0
+    elif min_beats is 'default':
+        min_beats = int(20. / beat_length)
+
+    if max_beats is None:
+        max_beats = -1
+    elif max_beats is 'default':
+        max_beats = int(90. / beat_length)
+        max_beats = min(max_beats, penalty.shape[1])
+
+    tc2 = np.nan_to_num(trans_cost)
+    pen2 = np.nan_to_num(penalty)
+
+    beat_names = []
+    for i, bn in enumerate(all_beat_names):
+        for b in bn:
+            if not str(b).startswith('p'):
+                beat_names.append((i, float(b)))
+    beat_names.extend([('p', i) for i in xrange(max_pause_beats)])
+
+    result_labels = []
+
+    logging.info("Running optimization (full backtrace, memory efficient)")
+    logging.info("\twith min_beats(%d) and max_beats(%d) and first_pause(%d)" %
+                 (min_beats, max_beats, first_pause))
+
+    song_starts = [0]
+    for song in songs:
+        song_starts.append(song_starts[-1] + len(song.analysis["beats"]))
+    song_ends = np.array(song_starts[1:], dtype=np.int32)
+    song_starts = np.array(song_starts[:-1], dtype=np.int32)
+
+    t1 = time.clock()
+    path_i, path_cost = build_table_full_backtrace(
+        tc2, pen2, song_starts, song_ends,
+        first_pause=first_pause, max_beats=max_beats, min_beats=min_beats)
+    t2 = time.clock()
+    logging.info("Built table (full backtrace) in {} seconds"
+                 .format(t2 - t1))
+
+    path = []
+    if max_beats == -1:
+        max_beats = min_beats + 1
+
+    first_pause_full = max_beats * first_pause
+    n_beats = first_pause
+    for i in path_i:
+        if i >= first_pause_full:
+            path.append(('p', i - first_pause_full))
+            result_labels.append(None)
+            # path.append('p' + str(i - first_pause_full))
+        else:
+            path.append(beat_names[i % n_beats])
+            song_i = path[-1][0]
+            beat_name = path[-1][1]
+            result_labels.append(
+                start[song_i][np.where(np.array(beats[song_i]) ==
+                                       beat_name)[0][0]])
+            # path.append(float(beat_names[i % n_beats]))
+
+    # else:
+    #     print("Running optimization (fast, full table)")
+    #     # this won't work right now- needs to be updated
+    #     # with the multi-song approach
+
+    #     # fortran method
+    #     t1 = time.clock()
+    #     cost, prev_node = build_table(tc2, pen2)
+    #     t2 = time.clock()
+    #     print("Built table (fortran) in {} seconds".format(t2 - t1))
+    #     res = cost[:, -1]
+    #     best_idx = N.argmin(res)
+    #     if N.isfinite(res[best_idx]):
+    #         path, path_cost, path_i = _reconstruct_path(
+    #             prev_node, cost, beat_names, best_idx, N.shape(cost)[1] - 1)
+    #         # path_i = [beat_names.index(x) for x in path]
+    #     else:
+    #         # throw an exception here?
+    #         return None
+
+    #     path = []
+    #     result_labels = []
+    #     if max_pause_beats == 0:
+    #         n_beats = total_music_beats
+    #         first_pause = n_beats
+    #     else:
+    #         n_beats = first_pause
+    #     for i in path_i:
+    #         if i >= first_pause:
+    #             path.append(('p', i - first_pause))
+    #             result_labels.append(None)
+    #         else:
+    #             path.append(beat_names[i % n_beats])
+    #             song_i = path[-1][0]
+    #             beat_name = path[-1][1]
+    #             result_labels.append(
+    #                 start[song_i][N.where(N.array(beats[song_i]) ==
+    #                               beat_name)[0][0]])
+
+    # return a radiotool Composition
+    logging.info("Generating audio")
+    (comp, cf_locations, result_full_labels,
+     cost_labels, contracted, result_volume) = \
+        _generate_audio(
+            songs, beats, path, path_cost, start,
+            volume=volume,
+            volume_breakpoints=volume_breakpoints,
+            springs=springs,
+            fade_in_len=fade_in_len, fade_out_len=fade_out_len)
+
+    info = {
+        "beat_length": beat_length,
+        "contracted": contracted,
+        "cost": np.sum(path_cost) / len(path),
+        "path": path,
+        "path_i": path_i,
+        "target_labels": target,
+        "result_labels": result_labels,
+        "result_full_labels": result_full_labels,
+        "result_volume": result_volume,
+        "transitions": [Label("crossfade", loc) for loc in cf_locations],
+        "path_cost": cost_labels
+    }
+
+    return comp, info
 
 def retarget(songs, duration, music_labels=None, out_labels=None,
              out_penalty=None, volume=None, volume_breakpoints=None,
@@ -355,26 +688,22 @@ def retarget(songs, duration, music_labels=None, out_labels=None,
         ) for in_va in in_vas]
     else:
         max_pause_beats = 0
-        #if len(constraints) > 0:
-        #    if isinstance(constraints[0], rt_constraints.Constraint):
-        #        constraints = [constraints]
+        if len(constraints) > 0:
+            if isinstance(constraints[0], rt_constraints.Constraint):
+                constraints = [constraints]
 
-    #pipelines = [rt_constraints.ConstraintPipeline(constraints=c_set)
-    #             for c_set in constraints
-
-    pipeline = rt_constraints.ConstraintPipeline(constraints=constraints)
+    pipelines = [rt_constraints.ConstraintPipeline(constraints=c_set)
+                for c_set in constraints]
 
     trans_costs = []
     penalties = []
     all_beat_names = []
 
-    #for i, song in enumerate(songs):
-    #    (trans_cost, penalty, bn) = pipeline.apply(song, len(target))
-    #    trans_costs.append(trans_cost)
-    #    penalties.append(penalty)
-    #   all_beat_names.append(bn)
-
-    (trans_costs, penalties, all_beat_names) = pipeline.apply(songs, len(target))
+    for i, song in enumerate(songs):
+        (trans_cost, penalty, bn) = pipelines[i].apply(song, len(target))
+        trans_costs.append(trans_cost)
+        penalties.append(penalty)
+        all_beat_names.append(bn)
 
     # remove combinging tables
     logging.info("Combining tables")
