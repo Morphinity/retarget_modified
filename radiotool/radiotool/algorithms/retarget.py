@@ -97,10 +97,10 @@ def retarget_multi_songs_to_length(songs, duration, start=True, end=True, old=Fa
                        beats_per_measure=None):
     duration = float(duration)
     constraints = [
-        rt_constraints.TimbrePitchConstraint(
-            context=0, timbre_weight=1.0, chroma_weight=1.0),
+        #rt_constraints.TimbrePitchConstraint(
+        #    context=0, timbre_weight=1.0, chroma_weight=1.0),
         rt_constraints.EnergyConstraint(penalty=.5),
-        rt_constraints.MinimumLoopConstraint(8),
+        #rt_constraints.MinimumLoopConstraint(8),
     ]
     if beats_per_measure is not None:
         constraints.append(
@@ -368,17 +368,13 @@ def retargetMod(songs, duration, music_labels=None, out_labels=None,
 
     pipeline = rt_constraints.ConstraintPipeline(constraints=constraints)
 
-    trans_costs = []
-    penalties = []
-    all_beat_names = []
-
     # for i, song in enumerate(songs):
     #    (trans_cost, penalty, bn) = pipeline.apply(song, len(target))
     #    trans_costs.append(trans_cost)
     #    penalties.append(penalty)
     #   all_beat_names.append(bn)
 
-    (trans_costs, penalties, all_beat_names) = pipeline.applyModified(songs, len(target))
+    (trans_cost, penalty, all_beat_names) = pipeline.applyModified(songs, len(target))
 
     # remove combinging tables
     logging.info("Combining tables")
@@ -387,7 +383,7 @@ def retargetMod(songs, duration, music_labels=None, out_labels=None,
 
     # combine transition cost tables
 
-    trans_cost = np.ones((total_beats, total_beats)) * np.inf
+    """trans_cost = np.ones((total_beats, total_beats)) * np.inf
     sizes = [len(b) for b in beats]
     idx = 0
     for i, size in enumerate(sizes):
@@ -413,7 +409,7 @@ def retargetMod(songs, duration, music_labels=None, out_labels=None,
         np.vstack([p[:len(beats[i]), :] for i, p in enumerate(penalties)])
 
     penalty[total_music_beats:, :] = penalties[0][len(beats[0]):, :]
-
+    """
     logging.info("Building cost table")
 
     # compute the dynamic programming table (prev python method)
