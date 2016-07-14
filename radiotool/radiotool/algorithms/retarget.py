@@ -100,7 +100,7 @@ def retarget_multi_songs_to_length(songs, duration, start=True, end=True, old=Fa
         #rt_constraints.TimbrePitchConstraint(
         #    context=0, timbre_weight=1.0, chroma_weight=1.0),
         rt_constraints.EnergyConstraint(penalty=.5),
-        #rt_constraints.MinimumLoopConstraint(8),
+        rt_constraints.MinimumLoopConstraint(8),
     ]
     if beats_per_measure is not None:
         constraints.append(

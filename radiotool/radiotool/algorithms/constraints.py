@@ -150,6 +150,16 @@ class MinimumLoopConstraint(Constraint):
                     transition_cost[i, i + j] += np.inf
         return transition_cost, penalty, beat_names
 
+    def applyModified(self, songs, transition_cost, penalty):
+        total_n_beats = 0
+        for song in songs:
+            total_n_beats += len(song.analysis["beats"])
+        for i in range(total_n_beats):
+            for j in range(-(self.min_loop - 1), 1):
+                if 0 <= i + j < total_n_beats:
+                    transition_cost[i, i + j] += np.inf
+        return transition_cost, penalty
+
     def __repr__(self):
         return "MinimumLoopConstraint: min_loop(%d)" % self.min_loop
 
