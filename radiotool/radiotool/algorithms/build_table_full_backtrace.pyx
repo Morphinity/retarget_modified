@@ -280,13 +280,13 @@ def build_table(double[:, :] trans_cost, double[:, :] penalty,
     else:
         p.no_max_beats = MAX_BEATS
 
+    p.min_beats = min_beats
+    p.max_beats = max_beats
+    p.p0_full = p.n_beats * p.max_beats
     p.pen_val = 99999999.0
     p.p0 = first_pause
     p.n_beats = p.p0
     p.n_pauses = trans_cost.shape[0] - p.p0
-    p.min_beats = min_beats
-    p.max_beats = max_beats
-    p.p0_full = p.n_beats * p.max_beats
     p.all_full = p.p0_full + p.n_pauses
 
     p.n_song_starts = len(song_starts)

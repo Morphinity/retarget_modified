@@ -7,6 +7,7 @@ import copy
 
 import numpy as np
 from scipy.special import binom
+import scipy.spatial
 import scipy
 
 import librosa_analysis
@@ -36,6 +37,20 @@ class ConstraintPipeline(object):
                 transition_cost, penalty, song, beat_names)
         return transition_cost, penalty, beat_names
 
+    def applyModified(self, songs, target_n_length):
+        total_n_beats = 0
+        all_beat_names = []
+        for song in songs:
+            total_n_beats += len(song.analysis["beats"])
+            all_beat_names.append(copy.copy(song.analysis["beats"]))
+
+        transition_cost = np.zeros((total_n_beats, total_n_beats))
+        penalty = np.zeros((total_n_beats, target_n_length))
+
+        for constraint in self.constraints:
+            transition_cost, penalty = constraint.applyModified(songs, transition_cost, penalty)
+        return transition_cost, penalty, all_beat_names
+
 
 class Constraint(object):
     def __init__(self):
@@ -43,6 +58,11 @@ class Constraint(object):
 
     def apply(self, transition_cost, penalty, song, beat_names):
         return transition_cost, penalty, beat_names
+
+    def applyModified(self, songs, transition_cost, penalty):
+        transition_cost = []
+        penalty = []
+        return transition_cost, penalty
 
 
 class RandomJitterConstraint(Constraint):
@@ -99,6 +119,63 @@ class TimbrePitchConstraint(Constraint):
 
         return transition_cost, penalty, beat_names
 
+    def applyModified(self, songs, transition_cost, penalty):
+        target_n_length = penalty.shape[1]
+        n_beats = len(songs[0].analysis["beats"]) + len(songs[1].analysis["beats"])
+        # beat_names = songs[0].analysis["beats"].__add__(songs[1].analysis["beats"])
+        beat_names = []
+        beat_names.append(songs[0].analysis["beats"])
+        beat_names.append(songs[1].analysis["beats"])
+        #transition_cost = np.zeros((n_beats, n_beats))
+        #penalty = np.zeros((n_beats, target_n_length))
+        # timbre => (beats+1*40)
+        # chroma => (beats+1*12)
+        # songs[0].analysis['timbres']).T
+        # timbre_dist = librosa_analysis.structure(
+        #     np.array(song.analysis['timbres']).T)
+        # chroma_dist = librosa_analysis.structure(
+        #     np.array(song.analysis['chroma']).T)
+        chroma_dist_arr = songs[0].analysis["chroma"].__add__(songs[1].analysis["chroma"])
+        timbre_dist_arr = songs[0].analysis["timbres"].__add__(songs[1].analysis["timbres"])
+
+        timbre_dist = librosa_analysis.structure(
+            np.array(timbre_dist_arr).T)
+        chroma_dist = librosa_analysis.structure(
+            np.array(chroma_dist_arr).T)
+
+        timbre_dist = np.delete(timbre_dist, (len(songs[0].analysis["beats"])), axis=0)
+        timbre_dist = np.delete(timbre_dist, (len(songs[0].analysis["beats"])), axis=1)
+
+        chroma_dist = np.delete(chroma_dist, (len(songs[0].analysis["beats"])), axis=0)
+        chroma_dist = np.delete(chroma_dist, (len(songs[0].analysis["beats"])), axis=1)
+
+        dists = self.tw * timbre_dist + self.cw * chroma_dist
+
+        if self.m > 0:
+            new_dists = np.copy(dists)
+            coefs = [binom(self.m * 2, i) for i in range(self.m * 2 + 1)]
+            coefs = np.array(coefs) / np.sum(coefs)
+            for beat_i in xrange(self.m, dists.shape[0] - self.m):
+                for beat_j in xrange(self.m, dists.shape[1] - self.m):
+                    new_dists[beat_i, beat_j] = 0.0
+                    for i, c in enumerate(coefs):
+                        t = i - self.m
+                        new_dists[beat_i, beat_j] += \
+                            c * dists[beat_i + t, beat_j + t]
+
+            dists = new_dists
+
+        # dists = np.copy(song.analysis["dense_dist"])
+        # shift it over
+        dists[:-1, :] = dists[1:, :]
+        dists[-1, :] = np.inf
+
+        # don't use the final beat
+        dists[:, -1] = np.inf
+
+        transition_cost[:dists.shape[0], :dists.shape[1]] += dists
+        return transition_cost, penalty
+
     def __repr__(self):
         return "TimbrePitchConstraint:" +\
             "%f(timbre) + %f(chroma), %f(context)" % (self.tw, self.cw, self.m)
@@ -130,9 +207,30 @@ class MinimumLoopConstraint(Constraint):
                     transition_cost[i, i + j] += np.inf
         return transition_cost, penalty, beat_names
 
+    def applyModified(self, songs, transition_cost, penalty):
+        total_n_beats = 0
+        for song in songs:
+            total_n_beats += len(song.analysis["beats"])
+        for i in range(total_n_beats):
+            for j in range(-(self.min_loop - 1), 1):
+                if 0 <= i + j < total_n_beats:
+                    transition_cost[i, i + j] += np.inf
+        return transition_cost, penalty
+
     def __repr__(self):
         return "MinimumLoopConstraint: min_loop(%d)" % self.min_loop
 
+
+class ChangeSongConstraint(Constraint):
+    def __init__(self, penalty):
+        self.penalty = penalty
+
+    def applyModified(self, songs, transition_cost, penalty):
+        idx = 0
+        for song in songs:
+            n_beats = song.analysis["beats"]
+            transition_cost[idx:idx+n_beats][idx:idx+n_beats] += self.penalty
+            idx += n_beats
 
 class LabelConstraint(Constraint):
     def __init__(self, in_labels, target_labels, penalty, penalty_window=0):
@@ -271,6 +369,49 @@ class EnergyConstraint(Constraint):
 
         return transition_cost, penalty, beat_names
 
+    def applyModified(self, songs, transition_cost, penalty):  #(self, transition_cost, penalty, song, beat_names):
+        total_n_beats = 0
+        for song in songs:
+            total_n_beats += len(song.analysis["beats"])
+        energies = np.zeros(total_n_beats)
+        counter = 0
+        for k, song in enumerate(songs):
+            sr = song.samplerate
+            frames = song.all_as_mono()
+            n_beats = len(song.analysis["beats"])
+            beat_names = copy.copy(song.analysis["beats"])
+
+            for i, beat in enumerate(beat_names[:n_beats - 1]):
+                start_frame = int(sr * beat)
+                end_frame = int(sr * beat_names[:n_beats][i + 1])
+                beat_frames = frames[start_frame:end_frame]
+                beat_frames *= np.hamming(len(beat_frames))
+                energies[counter] = np.sqrt(np.mean(beat_frames * beat_frames))
+                counter += 1
+
+            if k == len(songs) - 1:
+                energies[counter] = energies[-2]
+            else:
+                beat = beat_names[n_beats - 1]
+                start_frame = int(sr * beat)
+                beat_frames = frames[start_frame:]
+                beat_frames *= np.hamming(len(beat_frames))
+                energies[counter] = np.sqrt(np.mean(beat_frames * beat_frames))
+                counter += 1
+
+        energies = [[x] for x in energies]
+
+        dist_matrix = 10 * scipy.spatial.distance.squareform(
+            scipy.spatial.distance.pdist(energies, 'euclidean'))
+
+        # shift it
+        dist_matrix[:-1, :] = dist_matrix[1:, :]
+        dist_matrix[-1, :] = np.inf
+
+        transition_cost[:total_n_beats, :total_n_beats] += (dist_matrix * self.penalty)
+
+        return transition_cost, penalty
+
     def __repr__(self):
         return "EnergyConstraint: penalty=%f" % self.penalty
 
@@ -392,6 +533,10 @@ class StartAtStartConstraint(Constraint):
         penalty[self.padding + 1:, 0] += np.inf
         return transition_cost, penalty, beat_names
 
+    def applyModified(self, songs, transition_cost, penalty):
+        penalty[self.padding + 1:, 0] += np.inf
+        return transition_cost, penalty
+
     def __str__(self):
         return "StartAtStartConstraint"
 
@@ -468,6 +613,15 @@ class EndAtEndConstraint(Constraint):
         penalty[last_beat:, -1] += np.inf
         penalty[:last_beat - self.padding, -1] += np.inf
         return transition_cost, penalty, beat_names
+
+    def applyModified(self, songs, transition_cost, penalty):
+        total_n_beats = 0
+        for song in songs:
+            total_n_beats += len(song.analysis["beats"])
+        last_beat = total_n_beats
+        penalty[last_beat:, -1] += np.inf
+        penalty[:last_beat - self.padding, -1] += np.inf
+        return transition_cost, penalty
 
     def __str__(self):
         return "EndAtEndConstraint"
