@@ -98,8 +98,8 @@ def retarget_multi_songs_to_length(songs, duration, start=True, end=True, old=Fa
     duration = float(duration)
     constraints = [
         rt_constraints.TimbrePitchConstraint(
-            context=0, timbre_weight=3.0, chroma_weight=3.0),
-        rt_constraints.EnergyConstraint(penalty=0.5),
+            context=0, timbre_weight=1.0, chroma_weight=1.0),
+        rt_constraints.EnergyConstraint(penalty=.5),
         rt_constraints.MinimumLoopConstraint(8),
         rt_constraints.ChangeSongConstraint(0)
     ]
@@ -454,7 +454,7 @@ def retargetMod(songs, duration, music_labels=None, out_labels=None,
     #song_starts = np.array(song_starts[:-1], dtype=np.int32)
 
     song_starts = np.array([0], dtype=np.int32)
-    song_ends = np.array([len(songs[0].analysis["beats"]) + len(songs[1].analysis["beats"])], dtype=np.int32)
+    song_ends = np.array([total_music_beats], dtype=np.int32)
 
     t1 = time.clock()
     path_i, path_cost = build_table_full_backtrace(
