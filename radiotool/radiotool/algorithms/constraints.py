@@ -231,6 +231,8 @@ class ChangeSongConstraint(Constraint):
             n_beats = song.analysis["beats"]
             transition_cost[idx:idx+n_beats][idx:idx+n_beats] += self.penalty
             idx += n_beats
+        return transition_cost, penalty
+
 
 class LabelConstraint(Constraint):
     def __init__(self, in_labels, target_labels, penalty, penalty_window=0):
