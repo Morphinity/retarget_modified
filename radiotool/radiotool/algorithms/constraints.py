@@ -119,6 +119,63 @@ class TimbrePitchConstraint(Constraint):
 
         return transition_cost, penalty, beat_names
 
+    def applyModified(self, songs, transition_cost, penalty):
+        target_n_length = penalty.shape[1]
+        n_beats = len(songs[0].analysis["beats"]) + len(songs[1].analysis["beats"])
+        # beat_names = songs[0].analysis["beats"].__add__(songs[1].analysis["beats"])
+        beat_names = []
+        beat_names.append(songs[0].analysis["beats"])
+        beat_names.append(songs[1].analysis["beats"])
+        #transition_cost = np.zeros((n_beats, n_beats))
+        #penalty = np.zeros((n_beats, target_n_length))
+        # timbre => (beats+1*40)
+        # chroma => (beats+1*12)
+        # songs[0].analysis['timbres']).T
+        # timbre_dist = librosa_analysis.structure(
+        #     np.array(song.analysis['timbres']).T)
+        # chroma_dist = librosa_analysis.structure(
+        #     np.array(song.analysis['chroma']).T)
+        chroma_dist_arr = songs[0].analysis["chroma"].__add__(songs[1].analysis["chroma"])
+        timbre_dist_arr = songs[0].analysis["timbres"].__add__(songs[1].analysis["timbres"])
+
+        timbre_dist = librosa_analysis.structure(
+            np.array(timbre_dist_arr).T)
+        chroma_dist = librosa_analysis.structure(
+            np.array(chroma_dist_arr).T)
+
+        timbre_dist = np.delete(timbre_dist, (len(songs[0].analysis["beats"])), axis=0)
+        timbre_dist = np.delete(timbre_dist, (len(songs[0].analysis["beats"])), axis=1)
+
+        chroma_dist = np.delete(chroma_dist, (len(songs[0].analysis["beats"])), axis=0)
+        chroma_dist = np.delete(chroma_dist, (len(songs[0].analysis["beats"])), axis=1)
+
+        dists = self.tw * timbre_dist + self.cw * chroma_dist
+
+        if self.m > 0:
+            new_dists = np.copy(dists)
+            coefs = [binom(self.m * 2, i) for i in range(self.m * 2 + 1)]
+            coefs = np.array(coefs) / np.sum(coefs)
+            for beat_i in xrange(self.m, dists.shape[0] - self.m):
+                for beat_j in xrange(self.m, dists.shape[1] - self.m):
+                    new_dists[beat_i, beat_j] = 0.0
+                    for i, c in enumerate(coefs):
+                        t = i - self.m
+                        new_dists[beat_i, beat_j] += \
+                            c * dists[beat_i + t, beat_j + t]
+
+            dists = new_dists
+
+        # dists = np.copy(song.analysis["dense_dist"])
+        # shift it over
+        dists[:-1, :] = dists[1:, :]
+        dists[-1, :] = np.inf
+
+        # don't use the final beat
+        dists[:, -1] = np.inf
+
+        transition_cost[:dists.shape[0], :dists.shape[1]] += dists
+        return transition_cost, penalty
+
     def __repr__(self):
         return "TimbrePitchConstraint:" +\
             "%f(timbre) + %f(chroma), %f(context)" % (self.tw, self.cw, self.m)

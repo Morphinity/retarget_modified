@@ -446,11 +446,14 @@ def retargetMod(songs, duration, music_labels=None, out_labels=None,
     logging.info("\twith min_beats(%d) and max_beats(%d) and first_pause(%d)" %
                  (min_beats, max_beats, first_pause))
 
-    song_starts = [0]
-    for song in songs:
-        song_starts.append(song_starts[-1] + len(song.analysis["beats"]))
-    song_ends = np.array(song_starts[1:], dtype=np.int32)
-    song_starts = np.array(song_starts[:-1], dtype=np.int32)
+    #song_starts = [0]
+    #for song in songs:
+    #    song_starts.append(song_starts[-1] + len(song.analysis["beats"]))
+    #song_ends = np.array(song_starts[1:], dtype=np.int32)
+    #song_starts = np.array(song_starts[:-1], dtype=np.int32)
+
+    song_starts = np.array([0], dtype=np.int32)
+    song_ends = np.array([len(songs[0].analysis["beats"]) + len(songs[1].analysis["beats"])], dtype=np.int32)
 
     t1 = time.clock()
     path_i, path_cost = build_table_full_backtrace(
@@ -523,7 +526,7 @@ def retargetMod(songs, duration, music_labels=None, out_labels=None,
     logging.info("Generating audio")
     (comp, cf_locations, result_full_labels,
      cost_labels, contracted, result_volume) = \
-        _generate_audio(
+        _generate_audio_mod(
             songs, beats, path, path_cost, start,
             volume=volume,
             volume_breakpoints=volume_breakpoints,
@@ -1006,6 +1009,442 @@ def __fast_argmin_axis_0(a):
     argmin_array[cols] = rows
     return argmin_array
 
+def _generate_audio_mod(songs, beats, new_beats, new_beats_cost, music_labels,
+                    volume=None, volume_breakpoints=None,
+                    springs=None, fade_in_len=3.0, fade_out_len=5.0):
+    # assuming same sample rate for all songs
+
+    logging.info("Building volume")
+    if volume is not None and volume_breakpoints is not None:
+        raise Exception("volume and volume_breakpoints cannot both be defined")
+    if volume_breakpoints is None:
+        if volume is None:
+            volume = 1.0
+        volume_array = np.array([volume])
+
+    if volume_breakpoints is not None:
+        volume_array = volume_breakpoints.to_array(songs[0].samplerate)
+
+    result_volume = np.zeros(volume_array.shape)
+
+    min_channels = min([x.channels for x in songs])
+
+    comp = Composition(channels=min_channels)
+
+    # currently assuming no transitions between different songs
+
+    beat_length = np.mean([song.analysis[BEAT_DUR_KEY]
+                           for song in songs])
+
+    audio_segments = []
+    segment_song_indicies = [new_beats[0][0]]  # store the transition between songs [0,1,0,1,2] if 0 1 and 2 are songs
+    current_seg = [0, 0]
+    if new_beats[0][0] == 'p':
+        current_seg = 'p'
+
+    for i, (song_i, b) in enumerate(new_beats):
+        if segment_song_indicies[-1] != song_i:
+            segment_song_indicies.append(song_i)
+
+        if current_seg == 'p' and song_i != 'p':
+            current_seg = [i, i]
+        elif current_seg != 'p' and song_i == 'p':
+            audio_segments.append(current_seg)
+            current_seg = 'p'
+        elif current_seg != 'p':
+            current_seg[1] = i
+    if current_seg != 'p':
+        audio_segments.append(current_seg)
+
+    segment_song_indicies = [x for x in segment_song_indicies if x != 'p']
+
+    beats = [np.array(b) for b in beats]
+    current_loc1 = 0.0
+
+    comp.add_tracks(songs)
+
+    all_cf_locations = []
+
+    aseg_fade_ins = []
+
+    logging.info("Building audio")
+    beat_starting = 0
+    num = 0
+    for song_i in segment_song_indicies:
+        segments = []
+        # TODO: is this +1 correct?
+        for num in range(beat_starting, len(new_beats)):
+            if (new_beats[num][0] != song_i):
+                break
+        # for the same song beats lies from beat_starting to num
+        # starts = np.array([x[1] for x in new_beats[aseg[0]:aseg[1] + 1]]) #beat location array (0,0.215) -- array of second element
+
+        starts1 = np.array([x[1] for x in new_beats[beat_starting:num]])
+        beat_starting = num
+
+        # array of all selected beats irrespective of song index
+
+        # return index of the matching beat of beats[m] array where m is the song no.
+        # bis = [np.nonzero(beats[song_i] == b)[0][0] for b in starts]
+
+        bis1 = [np.nonzero(beats[song_i] == b)[0][0] for b in starts1]
+
+        dists1 = np.zeros(len(starts1))
+        durs1 = np.zeros(len(starts1))
+        for i, beat in enumerate(starts1):
+            if i < len(bis1) - 1:
+                if bis1[i] + 1 != bis1[i + 1]:
+                    dists1[i + 1] = 1
+            if bis1[i] + 1 >= len(beats[song_i]):
+                # use the average beat duration if we don't know
+                # how long the beat is supposed to be
+                logging.warning("USING AVG BEAT DURATION IN SYNTHESIS -\
+                        POTENTIALLY NOT GOOD")
+                durs1[i] = songs[song_i].analysis[BEAT_DUR_KEY]
+            else:
+                durs1[i] = beats[song_i][bis1[i] + 1] - beats[song_i][bis1[i]]
+
+        current_loc1 = max(0, current_loc1)
+        cf_durations1 = []
+        cf_locations1 = []
+        segment_starts1 = [0]  # 0 or not
+        try:
+            segment_starts1.extend(np.where(dists1 == 1)[0])
+        except:
+            pass
+
+        for i, s_i in enumerate(segment_starts1):
+            if i == len(segment_starts1) - 1:
+                # last segment?
+                seg_duration = np.sum(durs1[s_i:])
+            else:
+                next_s_i = segment_starts1[i + 1]
+                seg_duration = np.sum(durs1[s_i:next_s_i])
+
+                cf_durations1.append(durs1[next_s_i])
+                cf_locations1.append(current_loc1 + seg_duration)
+
+            seg_music_location = starts1[s_i]
+
+            # seg_music_location actual location of music segment in song
+            # current_loc location of music in new segment
+            seg = Segment(songs[song_i], current_loc1,
+                          seg_music_location, seg_duration)
+
+            segments.append(seg)
+
+            # update location for next segment
+            current_loc1 += seg_duration
+
+        comp.add_segments(segments)
+
+        if segments[-1].comp_location + segments[-1].duration > \
+                len(volume_array):
+            diff = len(volume_array) - \
+                   (segments[-1].comp_location + segments[-1].duration)
+            new_volume_array = \
+                np.ones(segments[-1].comp_location + segments[-1].duration) * \
+                volume_array[-1]
+            new_volume_array[:len(volume_array)] = volume_array
+            volume_array = new_volume_array
+            result_volume = np.zeros(new_volume_array.shape)
+
+        for i, seg in enumerate(segments[:-1]):
+            logging.info(cf_durations1[i], seg.duration_in_seconds,
+                         segments[i + 1].duration_in_seconds)
+            rawseg = comp.cross_fade(seg, segments[i + 1], cf_durations1[i])
+
+            # decrease volume along crossfades
+            volume_frames = volume_array[
+                            rawseg.comp_location:rawseg.comp_location + rawseg.duration]
+            raw_vol = RawVolume(rawseg, volume_frames)
+            comp.add_dynamic(raw_vol)
+
+            result_volume[rawseg.comp_location:
+            rawseg.comp_location + rawseg.duration] = \
+                volume_frames
+
+        s0 = segments[0]
+        sn = segments[-1]
+
+        if fade_in_len is not None:
+            fi_len = min(fade_in_len, s0.duration_in_seconds)
+            fade_in_len_samps = fi_len * s0.track.samplerate
+            fade_in = comp.fade_in(s0, fi_len, fade_type="linear")
+            aseg_fade_ins.append(fade_in)
+        else:
+            fade_in = None
+
+        if fade_out_len is not None:
+            fo_len = min(5.0, sn.duration_in_seconds)
+            fade_out_len_samps = fo_len * sn.track.samplerate
+            fade_out = comp.fade_out(sn, fade_out_len, fade_type="exponential")
+        else:
+            fade_out = None
+
+        prev_end = 0.0
+
+        for seg in segments:
+            volume_frames = volume_array[
+                            seg.comp_location:seg.comp_location + seg.duration]
+
+            # this can happen on the final segment:
+            if len(volume_frames) == 0:
+                volume_frames = np.array([prev_end] * seg.duration)
+            elif len(volume_frames) < seg.duration:
+                delta = [volume_frames[-1]] * \
+                        (seg.duration - len(volume_frames))
+                volume_frames = np.r_[volume_frames, delta]
+            raw_vol = RawVolume(seg, volume_frames)
+            comp.add_dynamic(raw_vol)
+
+            try:
+                result_volume[seg.comp_location:
+                seg.comp_location + seg.duration] = volume_frames
+            except ValueError:
+                diff = (seg.comp_location + seg.duration) - len(result_volume)
+                result_volume = np.r_[result_volume, np.zeros(diff)]
+                result_volume[seg.comp_location:
+                seg.comp_location + seg.duration] = volume_frames
+
+            if len(volume_frames) != 0:
+                prev_end = volume_frames[-1]
+
+                # vol = Volume.from_segment(seg, volume)
+                # comp.add_dynamic(vol)
+
+        if fade_in is not None:
+            result_volume[s0.comp_location:
+            s0.comp_location + fade_in_len_samps] *= \
+                fade_in.to_array(channels=1).flatten()
+        if fade_out is not None:
+            result_volume[sn.comp_location + sn.duration - fade_out_len_samps:
+            sn.comp_location + sn.duration] *= \
+                fade_out.to_array(channels=1).flatten()
+
+        all_cf_locations.extend(cf_locations1)
+
+    # result labels
+    label_time = 0.0
+    pause_len = beat_length
+    # pause_len = song.analysis[BEAT_DUR_KEY]
+    result_full_labels = []
+    prev_label = -1
+    for beat_i, (song_i, beat) in enumerate(new_beats):
+        if song_i == 'p':
+            current_label = None
+            if current_label != prev_label:
+                result_full_labels.append(Label("pause", label_time))
+            prev_label = None
+
+            # label_time += pause_len
+            # catch up
+            label_time = max(
+                (beat_i + 1) * pause_len,
+                label_time)
+        else:
+            beat_i = np.where(np.array(beats[song_i]) == beat)[0][0]
+            next_i = beat_i + 1
+            current_label = music_labels[song_i][beat_i]
+            if current_label != prev_label:
+                if current_label is None:
+                    result_full_labels.append(Label("none", label_time))
+                else:
+                    result_full_labels.append(Label(current_label, label_time))
+            prev_label = current_label
+
+            if (next_i >= len(beats[song_i])):
+                logging.warning("USING AVG BEAT DURATION - "
+                                "POTENTIALLY NOT GOOD")
+                label_time += songs[song_i].analysis[BEAT_DUR_KEY]
+            else:
+                label_time += beats[song_i][next_i] - beat
+
+    # result costs
+    cost_time = 0.0
+    result_cost = []
+    for i, (song_i, b) in enumerate(new_beats):
+        result_cost.append(Label(new_beats_cost[i], cost_time))
+
+        if song_i == 'p':
+            # cost_time += pause_len
+            # catch up
+            cost_time = max(
+                (i + 1) * pause_len,
+                cost_time)
+        else:
+            beat_i = np.where(np.array(beats[song_i]) == b)[0][0]
+            next_i = beat_i + 1
+
+            if (next_i >= len(beats[song_i])):
+                cost_time += songs[song_i].analysis[BEAT_DUR_KEY]
+            else:
+                cost_time += beats[song_i][next_i] - b
+
+    logging.info("Contracting pause springs")
+    contracted = []
+    min_contraction = 0.5
+    if springs is not None:
+        offset = 0.0
+        for spring in springs:
+            contracted_time, contracted_dur = comp.contract(
+                spring.time - offset, spring.duration,
+                min_contraction=min_contraction)
+            if contracted_dur > 0:
+                logging.info("Contracted", contracted_time,
+                             "at", contracted_dur)
+
+                # move all the volume frames back
+                c_time_samps = contracted_time * segments[0].track.samplerate
+                c_dur_samps = contracted_dur * segments[0].track.samplerate
+                result_volume = np.r_[
+                    result_volume[:c_time_samps],
+                    result_volume[c_time_samps + c_dur_samps:]]
+
+                # can't move anything EARLIER than contracted_time
+
+                new_cf = []
+                for cf in all_cf_locations:
+                    if cf > contracted_time:
+                        new_cf.append(
+                            max(cf - contracted_dur, contracted_time))
+                    else:
+                        new_cf.append(cf)
+                all_cf_locations = new_cf
+
+                # for lab in result_full_labels:
+                #     if lab.time > contracted_time + contracted_dur:
+                #         lab.time -= contracted_dur
+
+                first_label = True
+                for lab_i, lab in enumerate(result_full_labels):
+                    # is this contracted in a pause that already started?
+                    # if lab_i + 1 < len(result_full_labels):
+                    #     next_lab = result_full_labels[lab_i + 1]
+                    #     if lab.time < contracted_time <= next_lab.time:
+                    #         first_label = False
+
+                    # if lab.time > contracted_time:
+                    #     # TODO: fix this hack
+                    #     if lab.name == "pause" and first_label:
+                    #         pass
+                    #     else:
+                    #         lab.time -= contracted_dur
+                    #     first_label = False
+
+                    try:
+                        if lab.time == contracted_time and \
+                                                result_full_labels[lab_i + 1].time - \
+                                                contracted_dur == lab.time:
+                            logging.warning("LABEL HAS ZERO LENGTH", lab)
+                    except:
+                        pass
+
+                    if lab.time > contracted_time:
+                        logging.info("\tcontracting label", lab)
+                        lab.time = max(
+                            lab.time - contracted_dur, contracted_time)
+                        # lab.time -= contracted_dur
+                        logging.info("\t\tto", lab)
+
+                new_result_cost = []
+                for cost_lab in result_cost:
+                    if cost_lab.time <= contracted_time:
+                        # cost is before contracted time
+                        new_result_cost.append(cost_lab)
+                    elif contracted_time < cost_lab.time <= \
+                                    contracted_time + contracted_dur:
+                        # cost is during contracted time
+                        # remove these labels
+                        if cost_lab.name > 0:
+                            logging.warning("DELETING nonzero cost label",
+                                            cost_lab.name, cost_lab.time)
+                    else:
+                        # cost is after contracted time
+                        cost_lab.time = max(
+                            cost_lab.time - contracted_dur, contracted_time)
+                        # cost_lab.time -= contracted_dur
+                        new_result_cost.append(cost_lab)
+
+                # new_result_cost = []
+                # first_label = True
+                # # TODO: also this hack. bleh.
+                # for cost_lab in result_cost:
+                #     if cost_lab.time < contracted_time:
+                #         new_result_cost.append(cost_lab)
+                #     elif cost_lab.time > contracted_time and\
+                #             cost_lab.time <= contracted_time +\
+                #                contracted_dur:
+                #         if first_label:
+                #             cost_lab.time = contracted_time
+                #             new_result_cost.append(cost_lab)
+                #         elif cost_lab.name > 0:
+                #             print "DELETING nonzero cost label:",\
+                #                 cost_lab.name, cost_lab.time
+                #         first_label = False
+                #     elif cost_lab.time > contracted_time + contracted_dur:
+                #         cost_lab.time -= contracted_dur
+                #         new_result_cost.append(cost_lab)
+                #         first_label = False
+                result_cost = new_result_cost
+
+                contracted.append(
+                    Spring(contracted_time + offset, contracted_dur))
+                offset += contracted_dur
+
+    for fade in aseg_fade_ins:
+        for spring in contracted:
+            if (spring.time - 1 <
+                    fade.comp_location_in_seconds <
+                            spring.time + spring.duration + 1):
+                result_volume[
+                fade.comp_location:
+                fade.comp_location + fade.duration] /= \
+                    fade.to_array(channels=1).flatten()
+
+                fade.fade_type = "linear"
+                fade.duration_in_seconds = 2.0
+                result_volume[
+                fade.comp_location:
+                fade.comp_location + fade.duration] *= \
+                    fade.to_array(channels=1).flatten()
+
+                logging.info("Changing fade at {}".format(
+                    fade.comp_location_in_seconds))
+
+    # for seg in comp.segments:
+    #     print seg.comp_location, seg.duration
+    # print
+    # for dyn in comp.dynamics:
+    #     print dyn.comp_location, dyn.duration
+
+    # add all the segments to the composition
+    # comp.add_segments(segments)
+
+    # all_segs = []
+
+    # for i, seg in enumerate(segments[:-1]):
+    #     rawseg = comp.cross_fade(seg, segments[i + 1], cf_durations[i])
+    #     all_segs.extend([seg, rawseg])
+
+    #     # decrease volume along crossfades
+    #     rawseg.track.frames *= music_volume
+
+    # all_segs.append(segments[-1])
+
+    # add dynamic for music
+    # vol = Volume(song, 0.0,
+    #     (last_seg.comp_location + last_seg.duration) /
+    #        float(song.samplerate),
+    #     volume)
+    # comp.add_dynamic(vol)
+
+    # cf durs?
+    # durs
+
+    return (comp, all_cf_locations, result_full_labels,
+            result_cost, contracted, result_volume)
+
 
 def _generate_audio(songs, beats, new_beats, new_beats_cost, music_labels,
                     volume=None, volume_breakpoints=None,
@@ -1119,6 +1558,7 @@ def _generate_audio(songs, beats, new_beats, new_beats_cost, music_labels,
         for i, s_i in enumerate(segment_starts):
             if i == len(segment_starts) - 1:
                 # last segment?
+                seg_duration = np.sum(durs[s_i:])
                 seg_duration = np.sum(durs[s_i:])
             else:
                 next_s_i = segment_starts[i + 1]
