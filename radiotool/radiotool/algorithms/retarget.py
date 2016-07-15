@@ -1079,7 +1079,7 @@ def _generate_audio_mod(songs, beats, new_beats, new_beats_cost, music_labels,
                 break
         # for the same song beats lies from beat_starting to num
         # starts = np.array([x[1] for x in new_beats[aseg[0]:aseg[1] + 1]]) #beat location array (0,0.215) -- array of second element
-        if num == (len(new_beats) - 1) and beat_starting == num:
+        if num == (len(new_beats) - 1) and new_beats[num][0] == song_i:
             num = num + 1
         starts1 = np.array([x[1] for x in new_beats[beat_starting:num]])
         beat_starting = num
