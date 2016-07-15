@@ -164,6 +164,17 @@ class MinimumLoopConstraint(Constraint):
         return "MinimumLoopConstraint: min_loop(%d)" % self.min_loop
 
 
+class ChangeSongConstraint(Constraint):
+    def __init__(self, penalty):
+        self.penalty = penalty
+
+    def applyModified(self, songs, transition_cost, penalty):
+        idx = 0
+        for song in songs:
+            n_beats = song.analysis["beats"]
+            transition_cost[idx:idx+n_beats][idx:idx+n_beats] += self.penalty
+            idx += n_beats
+
 class LabelConstraint(Constraint):
     def __init__(self, in_labels, target_labels, penalty, penalty_window=0):
         self.in_labels = copy.copy(in_labels)
