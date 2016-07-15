@@ -97,10 +97,11 @@ def retarget_multi_songs_to_length(songs, duration, start=True, end=True, old=Fa
                        beats_per_measure=None):
     duration = float(duration)
     constraints = [
-        #rt_constraints.TimbrePitchConstraint(
-        #    context=0, timbre_weight=1.0, chroma_weight=1.0),
-        rt_constraints.EnergyConstraint(penalty=.5),
+        rt_constraints.TimbrePitchConstraint(
+            context=0, timbre_weight=3.0, chroma_weight=3.0),
+        rt_constraints.EnergyConstraint(penalty=0.5),
         rt_constraints.MinimumLoopConstraint(8),
+        rt_constraints.ChangeSongConstraint(0)
     ]
     if beats_per_measure is not None:
         constraints.append(
@@ -1078,7 +1079,8 @@ def _generate_audio_mod(songs, beats, new_beats, new_beats_cost, music_labels,
                 break
         # for the same song beats lies from beat_starting to num
         # starts = np.array([x[1] for x in new_beats[aseg[0]:aseg[1] + 1]]) #beat location array (0,0.215) -- array of second element
-
+        if num == (len(new_beats) - 1) and beat_starting == num:
+            num = num + 1
         starts1 = np.array([x[1] for x in new_beats[beat_starting:num]])
         beat_starting = num
 

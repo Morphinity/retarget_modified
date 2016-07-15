@@ -228,8 +228,8 @@ class ChangeSongConstraint(Constraint):
     def applyModified(self, songs, transition_cost, penalty):
         idx = 0
         for song in songs:
-            n_beats = song.analysis["beats"]
-            transition_cost[idx:idx+n_beats][idx:idx+n_beats] += self.penalty
+            n_beats = len(song.analysis["beats"])
+            transition_cost[idx:idx+n_beats, idx:idx+n_beats] += [[self.penalty for x in range(0, n_beats)] for x in range(0, n_beats)]
             idx += n_beats
         return transition_cost, penalty
 
