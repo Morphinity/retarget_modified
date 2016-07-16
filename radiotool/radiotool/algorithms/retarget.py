@@ -99,9 +99,9 @@ def retarget_multi_songs_to_length(songs, duration, start=True, end=True, old=Fa
     constraints = [
         rt_constraints.TimbrePitchConstraint(
             context=0, timbre_weight=1.0, chroma_weight=1.0),
-        rt_constraints.EnergyConstraint(penalty=.5),
+        rt_constraints.EnergyConstraint(penalty=1),
         rt_constraints.MinimumLoopConstraint(8),
-        rt_constraints.ChangeSongConstraint(0)
+        rt_constraints.ChangeSongConstraint(1)
     ]
     if beats_per_measure is not None:
         constraints.append(
@@ -374,7 +374,6 @@ def retargetMod(songs, duration, music_labels=None, out_labels=None,
     #    trans_costs.append(trans_cost)
     #    penalties.append(penalty)
     #   all_beat_names.append(bn)
-
     (trans_cost, penalty, all_beat_names) = pipeline.applyModified(songs, len(target))
 
     # remove combinging tables
@@ -383,34 +382,6 @@ def retargetMod(songs, duration, music_labels=None, out_labels=None,
     total_beats = total_music_beats + max_pause_beats
 
     # combine transition cost tables
-
-    """trans_cost = np.ones((total_beats, total_beats)) * np.inf
-    sizes = [len(b) for b in beats]
-    idx = 0
-    for i, size in enumerate(sizes):
-        trans_cost[idx:idx + size, idx:idx + size] = \
-            trans_costs[i][:size, :size]
-        idx += size
-
-    trans_cost[:total_music_beats, total_music_beats:] = \
-        np.vstack([tc[:len(beats[i]), len(beats[i]):]
-                   for i, tc in enumerate(trans_costs)])
-
-    trans_cost[total_music_beats:, :total_music_beats] = \
-        np.hstack([tc[len(beats[i]):, :len(beats[i])]
-                   for i, tc in enumerate(trans_costs)])
-
-    trans_cost[total_music_beats:, total_music_beats:] = \
-        trans_costs[0][len(beats[0]):, len(beats[0]):]
-
-    # combine penalty tables
-    penalty = np.empty((total_beats, penalties[0].shape[1]))
-
-    penalty[:total_music_beats, :] = \
-        np.vstack([p[:len(beats[i]), :] for i, p in enumerate(penalties)])
-
-    penalty[total_music_beats:, :] = penalties[0][len(beats[0]):, :]
-    """
     logging.info("Building cost table")
 
     # compute the dynamic programming table (prev python method)
@@ -443,26 +414,52 @@ def retargetMod(songs, duration, music_labels=None, out_labels=None,
 
     result_labels = []
 
-    logging.info("Running optimization (full backtrace, memory efficient)")
-    logging.info("\twith min_beats(%d) and max_beats(%d) and first_pause(%d)" %
-                 (min_beats, max_beats, first_pause))
-
-    #song_starts = [0]
-    #for song in songs:
-    #    song_starts.append(song_starts[-1] + len(song.analysis["beats"]))
-    #song_ends = np.array(song_starts[1:], dtype=np.int32)
-    #song_starts = np.array(song_starts[:-1], dtype=np.int32)
-
+    found = False
     song_starts = np.array([0], dtype=np.int32)
     song_ends = np.array([total_music_beats], dtype=np.int32)
 
-    t1 = time.clock()
-    path_i, path_cost = build_table_full_backtrace(
-        tc2, pen2, song_starts, song_ends,
-        first_pause=first_pause, max_beats=max_beats, min_beats=min_beats)
-    t2 = time.clock()
-    logging.info("Built table (full backtrace) in {} seconds"
-                 .format(t2 - t1))
+    song_beat_idx = []
+    idx = 0
+    for songbeats in beats:
+        song_beat_idx.append(len(songbeats) + idx)
+        idx += len(songbeats)
+
+    while not found:
+        print("Try")
+        # remove combinging tables
+        logging.info("Running optimization (full backtrace, memory efficient)")
+        logging.info("\twith min_beats(%d) and max_beats(%d) and first_pause(%d)" %
+                     (min_beats, max_beats, first_pause))
+
+        t1 = time.clock()
+        path_i, path_cost = build_table_full_backtrace(
+            tc2, pen2, song_starts, song_ends,
+            first_pause=first_pause, max_beats=max_beats, min_beats=min_beats)
+        t2 = time.clock()
+        logging.info("Built table (full backtrace) in {} seconds"
+                     .format(t2 - t1))
+        found = True
+        curr_beat = path_i[0]
+        curr_beat_count = 1
+        for song, end_beat in enumerate(song_beat_idx):
+            if curr_beat < end_beat:
+                curr_song = song
+                break
+
+        for i in range(1, len(path_i)):
+            curr_beat = path_i[i]
+            for song, end_beat in enumerate(song_beat_idx):
+                if curr_beat < end_beat:
+                    if curr_song == song:
+                        curr_beat_count += 1
+                    else:
+                        if curr_beat_count < 8:
+                            tc2[path_i[i-1]][path_i[i]] += 5.0 # adding more penalty to this transition
+                            found = False
+                        curr_song = song
+                        curr_beat_count = 1
+                    break
+
 
     path = []
     if max_beats == -1:
