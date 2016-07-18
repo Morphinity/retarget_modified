@@ -135,19 +135,41 @@ class TimbrePitchConstraint(Constraint):
         #     np.array(song.analysis['timbres']).T)
         # chroma_dist = librosa_analysis.structure(
         #     np.array(song.analysis['chroma']).T)
-        chroma_dist_arr = songs[0].analysis["chroma"].__add__(songs[1].analysis["chroma"])
-        timbre_dist_arr = songs[0].analysis["timbres"].__add__(songs[1].analysis["timbres"])
+        # chroma_dist_arr = songs[0].analysis["chroma"].__add__(songs[1].analysis["chroma"])
+        # timbre_dist_arr = songs[0].analysis["timbres"].__add__(songs[1].analysis["timbres"])
+
+        chroma_dist_arr = songs[0].analysis["chroma"]
+        timbre_dist_arr = songs[0].analysis["timbres"]
+
+        for i, song in enumerate(songs):
+            if i != 0:
+                chroma_dist_arr = chroma_dist_arr.__add__(song.analysis["chroma"])
+                timbre_dist_arr = timbre_dist_arr.__add__(song.analysis["timbres"])
+
+
 
         timbre_dist = librosa_analysis.structure(
             np.array(timbre_dist_arr).T)
         chroma_dist = librosa_analysis.structure(
             np.array(chroma_dist_arr).T)
 
-        timbre_dist = np.delete(timbre_dist, (len(songs[0].analysis["beats"])), axis=0)
-        timbre_dist = np.delete(timbre_dist, (len(songs[0].analysis["beats"])), axis=1)
+        beatsum = np.zeros(len(songs))
+        beatsum[0] = len(songs[0].analysis["beats"])
+        for i, song in enumerate(songs):
 
-        chroma_dist = np.delete(chroma_dist, (len(songs[0].analysis["beats"])), axis=0)
-        chroma_dist = np.delete(chroma_dist, (len(songs[0].analysis["beats"])), axis=1)
+            if i == 0:
+                timbre_dist = np.delete(timbre_dist, beatsum[i], axis=0)
+                timbre_dist = np.delete(timbre_dist, beatsum[i], axis=1)
+
+                chroma_dist = np.delete(chroma_dist, beatsum[i], axis=0)
+                chroma_dist = np.delete(chroma_dist, beatsum[i], axis=1)
+            elif i != (len(songs) - 1):
+                beatsum[i] = beatsum[i-1] + len(song.analysis["beats"])
+                timbre_dist = np.delete(timbre_dist, beatsum[i], axis=0)
+                timbre_dist = np.delete(timbre_dist, beatsum[i], axis=1)
+
+                chroma_dist = np.delete(chroma_dist, beatsum[i], axis=0)
+                chroma_dist = np.delete(chroma_dist, beatsum[i], axis=1)
 
         dists = self.tw * timbre_dist + self.cw * chroma_dist
 
@@ -228,9 +250,11 @@ class ChangeSongConstraint(Constraint):
     def applyModified(self, songs, transition_cost, penalty):
         idx = 0
         for song in songs:
-            n_beats = song.analysis["beats"]
-            transition_cost[idx:idx+n_beats][idx:idx+n_beats] += self.penalty
+            n_beats = len(song.analysis["beats"])
+            transition_cost[idx:idx+n_beats, idx:idx+n_beats] += [[self.penalty for x in range(0, n_beats)] for x in range(0, n_beats)]
             idx += n_beats
+        return transition_cost, penalty
+
 
 class LabelConstraint(Constraint):
     def __init__(self, in_labels, target_labels, penalty, penalty_window=0):
