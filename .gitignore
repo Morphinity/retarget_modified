@@ -7,3 +7,4 @@ install.log
 *.so
 *.wav
 /.idea
+/test
