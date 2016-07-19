@@ -8,3 +8,4 @@ install.log
 *.wav
 /.idea
 /test
+input_paths
