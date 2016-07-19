@@ -122,10 +122,6 @@ class TimbrePitchConstraint(Constraint):
     def applyModified(self, songs, transition_cost, penalty):
         target_n_length = penalty.shape[1]
         n_beats = len(songs[0].analysis["beats"]) + len(songs[1].analysis["beats"])
-        # beat_names = songs[0].analysis["beats"].__add__(songs[1].analysis["beats"])
-        beat_names = []
-        beat_names.append(songs[0].analysis["beats"])
-        beat_names.append(songs[1].analysis["beats"])
         #transition_cost = np.zeros((n_beats, n_beats))
         #penalty = np.zeros((n_beats, target_n_length))
         # timbre => (beats+1*40)
@@ -190,10 +186,16 @@ class TimbrePitchConstraint(Constraint):
         # dists = np.copy(song.analysis["dense_dist"])
         # shift it over
         dists[:-1, :] = dists[1:, :]
-        dists[-1, :] = np.inf
+        #dists[-1, :] = np.inf #transition from last beat is not possible
 
         # don't use the final beat
-        dists[:, -1] = np.inf
+        #dists[:, -1] = np.inf #transition to last beat is not possible
+
+        beat_count = 0
+        for song in songs:
+            beat_count += len(song.analysis["beats"])
+            dists[beat_count-1, :] = np.inf #transition from last beat is not possible
+            dists[:, beat_count-1] = np.inf #transition to last beat is not possible
 
         transition_cost[:dists.shape[0], :dists.shape[1]] += dists
         return transition_cost, penalty
