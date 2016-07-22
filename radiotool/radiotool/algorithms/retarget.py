@@ -130,7 +130,7 @@ def retarget_multi_songs_to_length(songs, duration, start=True, end=True, old=Fa
         )[-1]
 
         last_seg.duration_in_seconds = (
-            songs[1].duration_in_seconds - last_seg.start_in_seconds)
+            songs[len(songs) - 1].duration_in_seconds - last_seg.start_in_seconds)
 
     path_cost = info["path_cost"]
     total_nonzero_cost = []
@@ -455,9 +455,8 @@ def retargetMod(songs, duration, music_labels=None, out_labels=None,
                     else:
                         if curr_beat_count < 5:
                             print("min beats not satisfied")
-                            tc2[path_i[i-1]][path_i[i]] += 5 # adding more penalty to this transition
+                            tc2[path_i[i-1]][path_i[i]] += 0.1 # adding more penalty to this transition
                             found = False
-
                         i_index = -1
                         repeating = False
                         if path_i[i] in path_i[:i]:
@@ -1146,6 +1145,9 @@ def _generate_audio_mod(songs, beats, new_beats, new_beats_cost, music_labels,
 
             # seg_music_location actual location of music segment in song
             # current_loc location of music in new segment
+            if seg_duration < 0:
+                print("abc")
+
             seg = Segment(songs[song_i], current_loc1,
                           seg_music_location, seg_duration)
 

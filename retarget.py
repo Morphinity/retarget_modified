@@ -32,17 +32,20 @@ parser.add_argument('--no-end', dest='end', action='store_false', help='Do not r
 parser.add_argument('--cache', metavar='DIR', type=Path, help='Cache directory [{0}]'.format(cachedir()), default=cachedir())
 parser.add_argument('--no-cache', dest='cache', action='store_const', const=None, help='Do not use cache')
 parser.add_argument('-q', '--quiet', action='store_true', help="Quiet; do not print processing info.")
-parser.add_argument('input1', metavar='INFILE', type=str, help='Audio file to retarget (WAV format)')
-parser.add_argument('input2', metavar='INFILE', type=str, help='Audio file to retarget (WAV format)')
+#parser.add_argument('input1', metavar='INFILE', type=str, help='Audio file to retarget (WAV format)')
+#parser.add_argument('input2', metavar='INFILE', type=str, help='Audio file to retarget (WAV format)')
 parser.add_argument('--s', '--single', dest='singlesong', action='store_true')
 parser.add_argument('--old', dest='old', action='store_true')
 parser.set_defaults(start=True, end=True, singlesong=False, old=False)
 args = parser.parse_args()
 
-inpath1 = Path(args.input1)
-inpath2 = ""
-if not args.singlesong:
-    inpath2 = Path(args.input2)
+input_paths = open("../../input_paths", "r")
+
+song_paths = []
+for line in input_paths:
+    song_paths.append(line.split()[0])
+
+input_paths.close()
 
 length = args.length
 change_points = sorted(args.change or [])
@@ -51,17 +54,16 @@ if change_points: args.start = args.end = False
 if args.output:
     outpath = Path(args.output)
 else:
-    #tag = str(length)
-    #if change_points: tag += "-c" + "-".join(map(str, change_points))
-    #if not args.start: tag += "-nostart"
-    #if not args.end: tag += "-noend"
     tag = "result-mod"
 
-outpath = Path(args.output if args.output else "{path}-{tag}.wav".format(path=inpath1.namebase, tag=tag))
+if args.output:
+    outpath = Path(args.output)
+else :
+    print("output file not defined")
 
 if not args.quiet:
-    print "input1:\t"+inpath1
-    print "input2:\t"+inpath2
+    for filepath in song_paths:
+        print("input", filepath)
     print "output:\t"+outpath
     print "length:\t"+str(length)
     print "change_points:\t"+" ".join(map(str, change_points))
@@ -73,16 +75,20 @@ if not args.quiet: print "Retargeting..."
 
 if args.cache is not None: args.cache.makedirs_p()
 
-song1 = Song(inpath1, cache_dir = str(args.cache))
+"""song1 = Song(inpath1, cache_dir = str(args.cache))
 if not args.singlesong:
     song2 = Song(inpath2, cache_dir = str(args.cache))
+"""
+songs = []
+for path in song_paths:
+    songs.append(Song(path, cache_dir = str(args.cache)))
 
 if change_points:
-    composition, change_points = retarget.retarget_with_change_points(song1, change_points, length)
+    composition, change_points = retarget.retarget_with_change_points(songs[0], change_points, length)
 elif not args.singlesong:
-    composition = retarget.retarget_multi_songs_to_length([song1, song2], length, start=args.start, end=args.end, old=args.old)
+    composition = retarget.retarget_multi_songs_to_length(songs, length, start=args.start, end=args.end, old=args.old)
 else :
-    composition = retarget.retarget_to_length(song1, length, start=args.start, end=args.end)
+    composition = retarget.retarget_to_length(songs[0], length, start=args.start, end=args.end)
 
 composition.export(filename=outpath.stripext())
 if not args.quiet: print "Wrote {0}".format(outpath)
