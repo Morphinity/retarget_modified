@@ -454,10 +454,28 @@ def retargetMod(songs, duration, music_labels=None, out_labels=None,
                         curr_beat_count += 1
                     else:
                         if curr_beat_count < 5:
+                            print("min beats not satisfied")
                             tc2[path_i[i-1]][path_i[i]] += 0.1 # adding more penalty to this transition
                             found = False
+                        i_index = -1
+                        repeating = False
+                        if path_i[i] in path_i[:i]:
+                            i_index = path_i[:i].index(path_i[i])
+                            repeating = True
+                        if i_index != -1:
+                            if i_index == 0:
+                                repeating = True
+                            if i_index > 0 and path_i[i_index - 1] == path_i[i - 1]:
+                                repeating = True
+
+                        if repeating:
+                            print("Repeating")
+                            found = False
+                            tc2[path_i[i-1]][path_i[i]] += 5
+
                         curr_song = song
                         curr_beat_count = 1
+
                     break
 
 
