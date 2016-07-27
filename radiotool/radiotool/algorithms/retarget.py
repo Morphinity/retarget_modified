@@ -93,15 +93,15 @@ def retarget_to_length(song, duration, start=True, end=True, slack=5,
     return comp
 
 
-def retarget_multi_songs_to_length(songs, duration, start=True, end=True, old=False, slack=5,
+def retarget_multi_songs_to_length(songs, duration, constraints_params, start=True, end=True, old=False, slack=5,
                        beats_per_measure=None):
     duration = float(duration)
     constraints = [
         rt_constraints.TimbrePitchConstraint(
-            context=0, timbre_weight=1.0, chroma_weight=1.0),
-        rt_constraints.EnergyConstraint(penalty=1),
-        rt_constraints.MinimumLoopConstraint(8),
-        rt_constraints.ChangeSongConstraint(1)
+            context=0, timbre_weight=constraints_params["timbre"], chroma_weight=constraints_params["chroma"]),
+        rt_constraints.EnergyConstraint(penalty=constraints_params["energy"]),
+        rt_constraints.MinimumLoopConstraint(constraints_params["minbeats"]),
+        rt_constraints.ChangeSongConstraint(constraints_params["changesong"])
     ]
     if beats_per_measure is not None:
         constraints.append(
@@ -119,7 +119,7 @@ def retarget_multi_songs_to_length(songs, duration, start=True, end=True, old=Fa
             songs, duration, constraints=[constraints, constraints],
             fade_in_len=None, fade_out_len=None)
     else :
-        comp, info = retargetMod(songs, duration, constraints=constraints,
+        comp, info = retargetMod(songs, duration, constraints_params["minbeatcount"], constraints=constraints,
                                  fade_in_len=None, fade_out_len=None)
     # force the new track to extend to the end of the song
     if end:
@@ -220,7 +220,7 @@ def retarget_with_change_points(song, cp_times, duration):
 
     return comp, final_cp_locations
 
-def retargetMod(songs, duration, music_labels=None, out_labels=None,
+def retargetMod(songs, duration, min_beat_count=1, music_labels=None, out_labels=None,
                      out_penalty=None, volume=None, volume_breakpoints=None,
                      springs=None, constraints=None,
                      min_beats=None, max_beats=None,
@@ -453,7 +453,7 @@ def retargetMod(songs, duration, music_labels=None, out_labels=None,
                     if curr_song == song:
                         curr_beat_count += 1
                     else:
-                        if curr_beat_count < 5:
+                        if curr_beat_count < min_beat_count:
                             print("min beats not satisfied")
                             tc2[path_i[i-1]][path_i[i]] += 0.1 # adding more penalty to this transition
                             found = False
@@ -471,7 +471,7 @@ def retargetMod(songs, duration, music_labels=None, out_labels=None,
                         if repeating:
                             print("Repeating")
                             found = False
-                            tc2[path_i[i-1]][path_i[i]] += 5
+                            tc2[path_i[i-1]][path_i[i]] += 0.1
 
                         curr_song = song
                         curr_beat_count = 1

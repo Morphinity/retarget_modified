@@ -39,12 +39,81 @@ parser.add_argument('--old', dest='old', action='store_true')
 parser.set_defaults(start=True, end=True, singlesong=False, old=False)
 args = parser.parse_args()
 
+constraint_params = {
+    'timbre': 1.0,
+    'chroma': 1.0,
+    'energy': 1.0,
+    'minbeats': 10,
+    'changesong': 1.0,
+    'minbeatcount': 3
+}
+for root, dirs, files in os.walk("../../input"):
+    if 'config' in files:
+        config = open(root + "/config", "r")
+        song_paths = []
+        length = 60
+        start = True
+        end = True
+        old = False
+        for line in config:
+            params = line.split("=")
+            if params[0] == "input":
+                song_paths.append(root + "/" + params[1].split()[0])
+            elif params[0] == "timbre":
+                constraint_params[params[0]] = float(params[1].split()[0])
+            elif params[0] == "chroma":
+                constraint_params[params[0]] = float(params[1].split()[0])
+            elif params[0] == "energy":
+                constraint_params[params[0]] = float(params[1].split()[0])
+            elif params[0] == "minbeats":
+                constraint_params[params[0]] = int(params[1].split()[0])
+            elif params[0] == "changesong":
+                constraint_params[params[0]] = float(params[1].split()[0])
+            elif params[0] == "length":
+                length = float(params[1].split()[0])
+            elif params[0] == "nostart\n":
+                start = False
+            elif params[0] == "noend\n":
+                end = False
+            elif params[0] == "minbeatcount":
+                constraint_params[params[0]] = int(params[1].split()[0])
+
+        config.close()
+
+        outpath = Path(root + "/result.wav")
+
+        if not args.quiet:
+            for filepath in song_paths:
+                print("input", filepath)
+            print "output:\t" + outpath
+            print "length:\t" + str(length)
+            print "start:\t" + str(start)
+            print "end:\t" + str(end)
+            print "cache:\t" + str(args.cache)
+            print "timbre:\t" + str(constraint_params["timbre"])
+            print "chroma:\t" + str(constraint_params["chroma"])
+            print "energy:\t" + str(constraint_params["energy"])
+            print "minbeats:\t" + str(constraint_params["minbeats"])
+            print "changesong:\t" + str(constraint_params["changesong"])
+            print "minbeatcount:\t" + str(constraint_params["minbeatcount"])
+
+        songs = []
+        for path in song_paths:
+            songs.append(Song(path, cache_dir=str(args.cache)))
+
+        composition = retarget.retarget_multi_songs_to_length(songs, length, constraint_params, start=start, end=end,
+                                                                  old=old)
+
+        composition.export(filename=outpath.stripext())
+
+        if not args.quiet: print "Wrote {0}".format(outpath)
+
+"""
 input_paths = open("../../input_paths", "r")
 
 song_paths = []
 for line in input_paths:
     song_paths.append(line.split()[0])
-
 input_paths.close()
 
 length = args.length
@@ -75,10 +144,10 @@ if not args.quiet: print "Retargeting..."
 
 if args.cache is not None: args.cache.makedirs_p()
 
-"""song1 = Song(inpath1, cache_dir = str(args.cache))
+song1 = Song(inpath1, cache_dir = str(args.cache))
 if not args.singlesong:
     song2 = Song(inpath2, cache_dir = str(args.cache))
-"""
+
 songs = []
 for path in song_paths:
     songs.append(Song(path, cache_dir = str(args.cache)))
@@ -92,3 +161,4 @@ else :
 
 composition.export(filename=outpath.stripext())
 if not args.quiet: print "Wrote {0}".format(outpath)
+"""
